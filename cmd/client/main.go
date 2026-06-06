@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/arnabpachal/localtunnel/pkg/tunnel"
+	"github.com/Arnab-Pachal1234/FolderExposer/pkg/tunnel"
 )
 
 func main() {

@@ -1,5 +1,5 @@
-version: 2
-project_name: localtunnel-go
+version: 1
+project_name: FolderExposer
 
 builds:
   - id: server
