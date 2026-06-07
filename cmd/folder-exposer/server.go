@@ -9,29 +9,32 @@ import (
 	"time"
 
 	"github.com/Arnab-Pachal1234/FolderExposer/pkg/tunnel"
+	"github.com/spf13/cobra"
 )
 
 const SecureSystemToken = "dev_secure_99"
 
-// FEATURE: The Idle Timeout Wrapper
+var (
+	publicPort  int
+	controlPort int
+	dataPort    int
+)
+
 type IdleTimeoutConn struct {
 	net.Conn
 	Timeout time.Duration
 }
 
-// Every time data is READ, push the deadline back
 func (i *IdleTimeoutConn) Read(b []byte) (int, error) {
 	i.Conn.SetReadDeadline(time.Now().Add(i.Timeout))
 	return i.Conn.Read(b)
 }
 
-// Every time data is WRITTEN, push the deadline back
 func (i *IdleTimeoutConn) Write(b []byte) (int, error) {
 	i.Conn.SetWriteDeadline(time.Now().Add(i.Timeout))
 	return i.Conn.Write(b)
 }
 
-// FEATURE: Upgraded Tunnel Struct holding security state
 type ActiveTunnel struct {
 	ControlConn net.Conn
 	Password    string
@@ -44,27 +47,38 @@ type RelayServer struct {
 	mu      sync.Mutex
 }
 
-func main() {
-	server := &RelayServer{tunnels: make(map[string]*ActiveTunnel)}
+var serverCmd = &cobra.Command{
+	Use:   "server",
+	Short: "Starts the public VPS relay server",
+	Run: func(cmd *cobra.Command, args []string) {
+		server := &RelayServer{tunnels: make(map[string]*ActiveTunnel)}
 
-	listener, err := net.Listen("tcp", ":9000")
-	if err != nil {
-		fmt.Printf("Server boot failure: %v\n", err)
-		return
-	}
-	defer listener.Close()
-	fmt.Println("[Server] Secured Cloud Relay listening on port :9000...")
-
-	// Start the Gateway
-	go server.startSecureGateway(":8080", ":9001")
-
-	for {
-		conn, err := listener.Accept()
+		controlAddr := fmt.Sprintf(":%d", controlPort)
+		listener, err := net.Listen("tcp", controlAddr)
 		if err != nil {
-			continue
+			fmt.Printf("Server boot failure: %v\n", err)
+			return
 		}
-		go server.handleClient(conn)
-	}
+		defer listener.Close()
+		fmt.Printf("[Server] Secured Cloud Relay listening on port %s...\n", controlAddr)
+
+		go server.startSecureGateway(fmt.Sprintf(":%d", publicPort), fmt.Sprintf(":%d", dataPort))
+
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				continue
+			}
+			go server.handleClient(conn)
+		}
+	},
+}
+
+func init() {
+	rootCmd.AddCommand(serverCmd)
+	serverCmd.Flags().IntVarP(&publicPort, "public-port", "p", 8080, "Port for public web traffic")
+	serverCmd.Flags().IntVarP(&controlPort, "control-port", "c", 9000, "Port for the local client heartbeat")
+	serverCmd.Flags().IntVarP(&dataPort, "data-port", "d", 9001, "Port for the ephemeral data sockets")
 }
 
 func (s *RelayServer) handleClient(conn net.Conn) {
@@ -114,8 +128,6 @@ func (s *RelayServer) handleClient(conn net.Conn) {
 	}
 }
 
-// FEATURE: The Secure HTTP Gateway
-// FEATURE: The Secure HTTP Gateway (DEBUG MODE)
 func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 	dataListener, _ := net.Listen("tcp", dataPort)
 	dataConns := make(chan net.Conn)
@@ -142,7 +154,6 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 			return
 		}
 
-		// 1. Password Check
 		_, pass, ok := req.BasicAuth()
 		if !ok || pass != tunnelInfo.Password {
 			fmt.Println("[DEBUG-SERVER] Rejecting: Incorrect or missing password.")
@@ -151,11 +162,10 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 			return
 		}
 
-		// 2. Concurrency Gate
 		tunnelInfo.mu.Lock()
 		if tunnelInfo.IsBusy {
 			tunnelInfo.mu.Unlock()
-			fmt.Printf("[DEBUG-SERVER] Rejecting %s: Tunnel is currently busy with another file!\n", req.URL.Path)
+			fmt.Printf("[DEBUG-SERVER] Rejecting %s: Tunnel is currently busy!\n", req.URL.Path)
 			http.Error(w, "Resource currently in use by another user.", http.StatusServiceUnavailable)
 			return
 		}
@@ -163,11 +173,9 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		tunnelInfo.mu.Unlock()
 		fmt.Println("[DEBUG-SERVER] Door Locked. Securing connection for data transfer.")
 
-		// 3. Telemetry
 		auditMsg := fmt.Sprintf(`{"time": "%s", "ip": "%s", "path": "%s"}`, time.Now().Format("15:04:05"), req.RemoteAddr, req.URL.Path)
 		tunnel.WriteJSON(tunnelInfo.ControlConn, tunnel.Message{Type: "AUDIT_LOG", Payload: auditMsg})
 
-		// 4. Hijack Socket
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "Server error", http.StatusInternalServerError)
@@ -175,15 +183,13 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		}
 		publicConn, _, _ := hijacker.Hijack()
 
-		// 5. Signal laptop
-		fmt.Println("[DEBUG-SERVER] Sending NEW_REQUEST signal to laptop via Control Channel...")
+		fmt.Println("[DEBUG-SERVER] Sending NEW_REQUEST signal to laptop...")
 		tunnel.WriteJSON(tunnelInfo.ControlConn, tunnel.Message{Type: "NEW_REQUEST"})
 
-		// FIX: Prevent permanent lockout! Wait max 5 seconds for laptop to connect.
 		var laptopDataConn net.Conn
 		select {
 		case laptopDataConn = <-dataConns:
-			fmt.Println("[DEBUG-SERVER] Laptop successfully connected to Data Port 9001!")
+			fmt.Println("[DEBUG-SERVER] Laptop successfully connected to Data Port!")
 		case <-time.After(5 * time.Second):
 			fmt.Println("[DEBUG-SERVER] TIMEOUT ERROR: Laptop failed to connect in time. Unlocking door.")
 			publicConn.Close()
@@ -193,7 +199,6 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 			return
 		}
 
-		// Strip Keep-Alive to force clean hangups
 		req.Header.Set("Connection", "close")
 		req.Close = true
 		req.Write(laptopDataConn)
@@ -202,9 +207,8 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		safePublicConn := &IdleTimeoutConn{Conn: publicConn, Timeout: idleDuration}
 		safeLaptopConn := &IdleTimeoutConn{Conn: laptopDataConn, Timeout: idleDuration}
 
-		// 6. Bidirectional Tripwire with BLAME logging
 		go func() {
-			done := make(chan string, 2) // Now sends a string explaining WHY it closed
+			done := make(chan string, 2)
 
 			go func() {
 				io.Copy(safePublicConn, safeLaptopConn)
