@@ -14,8 +14,10 @@ import (
 )
 
 var (
-	password string
-	serverIP string
+	password  string
+	serverIP  string
+	subdomain string
+	localPort int // <-- ADD THIS
 )
 
 var exposeCmd = &cobra.Command{
@@ -29,7 +31,8 @@ var exposeCmd = &cobra.Command{
 		os.MkdirAll(folderToExpose, os.ModePerm)
 		fmt.Printf("[Client] Preparing to expose folder: %s\n", folderToExpose)
 
-		go startInternalFileServer(folderToExpose, ":8081")
+		localAddr := fmt.Sprintf(":%d", localPort)
+		go startInternalFileServer(folderToExpose, localAddr)
 
 		controlAddr := fmt.Sprintf("%s:9000", serverIP)
 		conn, err := net.Dial("tcp", controlAddr)
@@ -41,7 +44,7 @@ var exposeCmd = &cobra.Command{
 
 		initMsg := tunnel.Message{
 			Type:      "INIT",
-			Payload:   "arnab-dev-tunnel",
+			Payload:   subdomain,
 			AuthToken: "dev_secure_99",
 			Password:  password,
 		}
@@ -61,7 +64,19 @@ var exposeCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("[Client] Security Handshake Complete: %s\n", resp.Payload)
+		finalSubdomain := resp.Payload
+
+		// Build the public URL (Note: You can change this to your real VPS domain later)
+		publicURL := fmt.Sprintf("http://%s.%s:8080", finalSubdomain, serverIP)
+
+		fmt.Println("\n=======================================================")
+		fmt.Println("🚀 SUCCESS! YOUR FOLDER IS LIVE ON THE INTERNET")
+		fmt.Println("=======================================================")
+		fmt.Printf("🌍 Public URL: %s\n", publicURL)
+		fmt.Printf("🔒 Password:   %s\n", password)
+		fmt.Printf("📡 Local Port: %d\n", localPort)
+		fmt.Println("=======================================================")
+		fmt.Println("Listening for incoming connections. Press CTRL+C to stop.")
 
 		go func() {
 			for {
@@ -89,7 +104,8 @@ var exposeCmd = &cobra.Command{
 						fmt.Printf("[DEBUG-CLIENT] Error connecting to VPS %s: %v\n", dataAddr, err1)
 					}
 
-					localApp, err2 := net.Dial("tcp", "localhost:8081")
+					targetApp := fmt.Sprintf("localhost:%d", localPort)
+					localApp, err2 := net.Dial("tcp", targetApp)
 					if err2 != nil {
 						fmt.Printf("[DEBUG-CLIENT] Error connecting to Local File Server 8081: %v\n", err2)
 					}
@@ -138,6 +154,8 @@ func init() {
 	rootCmd.AddCommand(exposeCmd)
 	exposeCmd.Flags().StringVarP(&password, "password", "p", "secret_folder_123", "Basic Auth password for the web gate")
 	exposeCmd.Flags().StringVarP(&serverIP, "server", "s", "localhost", "The IP address of your VPS relay")
+	exposeCmd.Flags().StringVarP(&subdomain, "subdomain", "d", "", "Requested subdomain (leave blank for random)")
+	exposeCmd.Flags().IntVarP(&localPort, "local-port", "l", 8081, "Local port for the internal file server")
 }
 
 func startInternalFileServer(folderPath string, port string) {

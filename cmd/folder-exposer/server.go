@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,27 +98,45 @@ func (s *RelayServer) handleClient(conn net.Conn) {
 		return
 	}
 
-	tunnelID := initialMessage.Payload
+	requestedSubdomain := initialMessage.Payload
 	folderPassword := initialMessage.Password
 
 	s.mu.Lock()
-	s.tunnels[tunnelID] = &ActiveTunnel{
+
+	// ALGORITHM 1: Auto-Generate if the user left it blank
+	if requestedSubdomain == "" {
+		requestedSubdomain = generateRandomSubdomain()
+	}
+
+	// ALGORITHM 2: Collision Detection
+	if _, exists := s.tunnels[requestedSubdomain]; exists {
+		s.mu.Unlock()
+		fmt.Printf("[Server] Rejected: Subdomain '%s' is already in use by another user.\n", requestedSubdomain)
+		tunnel.WriteJSON(conn, tunnel.Message{Type: "AUTH_FAILURE", Payload: "Subdomain already in use. Please try another."})
+		conn.Close()
+		return
+	}
+
+	// Register the tunnel
+	s.tunnels[requestedSubdomain] = &ActiveTunnel{
 		ControlConn: conn,
 		Password:    folderPassword,
 		IsBusy:      false,
 	}
 	s.mu.Unlock()
 
-	fmt.Printf("[Server] Authentication Successful. Tunnel '%s' is now online.\n", tunnelID)
-	tunnel.WriteJSON(conn, tunnel.Message{Type: "INIT_ACK", Payload: "Secure tunnel verified and open"})
+	fmt.Printf("[Server] Authentication Successful. Tunnel '%s' is now online.\n", requestedSubdomain)
 
-	defer func() {
-		s.mu.Lock()
-		delete(s.tunnels, tunnelID)
-		s.mu.Unlock()
-		conn.Close()
-		fmt.Printf("[Server] Client '%s' disconnected. Routing path removed immediately.\n", tunnelID)
-	}()
+	// FIX: Send the FINAL confirmed subdomain back to the laptop
+	tunnel.WriteJSON(conn, tunnel.Message{Type: "INIT_ACK", Payload: requestedSubdomain})
+
+	// defer func() {
+	// 	s.mu.Lock()
+	// 	delete(s.tunnels, tunnelID)
+	// 	s.mu.Unlock()
+	// 	conn.Close()
+	// 	fmt.Printf("[Server] Client '%s' disconnected. Routing path removed immediately.\n", tunnelID)
+	// }()
 
 	for {
 		var msg tunnel.Message
@@ -144,13 +165,18 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
 		fmt.Printf("\n[DEBUG-SERVER] New public request from browser for path: %s\n", req.URL.Path)
 
+		host := req.Host
+		requestedSubdomain := strings.Split(host, ".")[0]
+
+		fmt.Printf("\n[DEBUG-SERVER] Routing Request: Traffic arriving for subdomain -> [%s]\n", requestedSubdomain)
+
 		s.mu.Lock()
-		tunnelInfo, exists := s.tunnels["arnab-dev-tunnel"]
+		tunnelInfo, exists := s.tunnels[requestedSubdomain]
 		s.mu.Unlock()
 
 		if !exists {
-			fmt.Println("[DEBUG-SERVER] Rejecting: Tunnel offline.")
-			http.Error(w, "Tunnel is currently offline.", http.StatusNotFound)
+			fmt.Printf("[DEBUG-SERVER] Rejecting: No active client connected to '%s'.\n", requestedSubdomain)
+			http.Error(w, fmt.Sprintf("Tunnel '%s' is currently offline or does not exist.", requestedSubdomain), http.StatusNotFound)
 			return
 		}
 
@@ -233,4 +259,10 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 	})
 
 	http.ListenAndServe(publicPort, nil)
+}
+
+func generateRandomSubdomain() string {
+	bytes := make([]byte, 3)
+	rand.Read(bytes)
+	return hex.EncodeToString(bytes)
 }
