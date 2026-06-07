@@ -1,1 +1,0 @@
-"This is hello.txt file in myshared_folder."
