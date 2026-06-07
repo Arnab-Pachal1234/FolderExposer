@@ -1,336 +1,179 @@
-# 🛡️ Localtunnel-Go: Zero-Trust Local Folder Gateway
+# 🛡️ FolderExposer
 
+## Zero-Trust Multi-Tenant Network Gateway
 
-**Localtunnel-Go** is a secure reverse tunneling application built in Go that allows a local folder to be exposed over the internet while keeping all files stored on the local device.
+**FolderExposer** is a secure, multi-tenant reverse tunneling application built in **Go**. It allows you to expose local folders to the public internet using dynamic subdomains, while keeping all files safely stored on your local device.
 
-
-It is designed for authenticated, secure, high-speed file and video transfer using a custom reverse tunnel architecture, raw TCP socket routing, HTTP protocol hijacking, security audit logging, health checks, and optimized memory management.
-
-
----
-
-
-## 🚀 Project Overview
-
-
-This project works as a private gateway between a public browser and a local file server running behind a NAT/firewall.
-
-
-Instead of uploading files to a cloud storage provider, the data remains on the local machine. External users can access the folder only after proper authentication through a secure tunneling mechanism.
-
-
-The system is built with a **Zero-Trust Network Access-style approach**, meaning every public request is authenticated, logged, and routed through a controlled tunnel.
-
+Engineered with a **Zero-Trust Network Access** approach, FolderExposer includes a unified Cobra CLI, custom raw TCP socket routing, HTTP protocol hijacking, collision-resistant subdomain generation, and an ultra-lightweight Docker deployment pipeline.
 
 ---
-
 
 ## ✨ Key Features
 
+### 🚀 Unified Cobra CLI Engine
+
+- Single powerful binary handles both the **Relay Server** and the **Local Client**.
+- Supports command-line arguments for dynamic ports, passwords, and subdomains.
+- Built on [`spf13/cobra`](https://github.com/spf13/cobra), the same CLI framework used by tools like Kubernetes and Docker.
+
+### 🌍 Multi-Tenant Subdomain Routing
+
+- True reverse proxy architecture using HTTP `Host` headers.
+- Multiple users can connect simultaneously using different subdomains.
+
+  Example:
+
+  ```text
+  movie-api.yourdomain.com
+  docs.yourdomain.com
+  files.yourdomain.com
+  ```
+
+- Built-in collision detection safely rejects duplicate subdomain requests.
+- Automatically generates secure randomized subdomains when no subdomain is provided.
 
 ### 🔐 Zero-Trust Access Control
 
+- HTTP Basic Authentication for public users.
+- Client handshake authentication using secure initialization tokens.
+- Public users never directly access the local machine.
+- Every request is verified before the relay bridges the socket.
 
-- HTTP Basic Authentication for public users
+### 🐳 Production-Ready Docker Pipeline
 
-- Client handshake authentication using secure initialization tokens
+- Ultra-lightweight multi-stage Alpine Linux container.
+- Final Docker image size is approximately **15MB**.
+- Simple VPS/cloud deployment using Docker.
+- Automated CI/CD pipeline using **GoReleaser** and **GitHub Actions**.
+- Cross-compiles Windows, macOS, and Linux binaries on every release.
 
-- Public users cannot directly access the local machine
+### 🧠 Aggressive Memory Management & Concurrency
 
-- Every request is verified before being forwarded
-
-
----
-
-
-### 🌐 Secure Reverse Tunneling
-
-
-- Exposes a local folder to the internet without directly opening local ports
-
-- Uses a VPS relay server as the public entry point
-
-- Local client connects outward to the VPS, making it NAT/firewall friendly
-
-- Keeps the actual data stored only on the local device
-
+- Mutex-based busy locks prevent race conditions during large file or video transfers.
+- Bidirectional teardown tripwires immediately free sockets when a browser tab closes or a transfer finishes.
+- Drops unnecessary secondary requests when the tunnel is actively streaming data.
 
 ---
-
-
-### ⚡ High-Speed File and Video Transfer
-
-
-- Supports large file transfers
-
-- Supports video streaming through raw TCP socket forwarding
-
-- Uses `io.Copy` for efficient bidirectional data streaming
-
-- Avoids unnecessary buffering for better performance
-
-
----
-
-
-### 🧠 Aggressive Memory Management
-
-
-- Automatically closes broken or idle connections
-
-- Prevents zombie sockets and memory leaks
-
-- Uses timeout-based connection cleanup
-
-- Frees resources immediately after transfer completion
-
-
----
-
-
-### 🧵 Concurrency Protection
-
-
-- Uses a mutex-based busy-lock mechanism
-
-- Allows one controlled transfer session at a time
-
-- Prevents race conditions during large file or video transfer
-
-- Drops unnecessary secondary requests when the tunnel is already busy
-
-
----
-
-
-### 📊 Security Audit Logging
-
-
-- Logs visitor IP addresses
-
-- Logs requested paths
-
-- Logs access time
-
-- Sends audit telemetry from the VPS relay back to the local client
-
-- Stores logs locally in `security_report.json`
-
-
----
-
-
-### ❤️ Health Check and Monitoring
-
-
-- Heartbeat mechanism using `PING/PONG`
-
-- Detects disconnected clients
-
-- Monitors tunnel availability
-
-- Helps maintain stable long-running tunnel sessions
-
-
----
-
 
 ## 🏗️ Architecture Overview
 
-
 ```text
-
 [ Public Browser ]
-
         |
-
-        | HTTP Request + Basic Authentication
-
+        | HTTP Request
+        | Host: my-api.localhost
+        | Basic Auth
         v
-
 =================================================
-
-[ VPS Relay Server ]
-
+[ VPS Relay Server - Port 8080 ]
 -------------------------------------------------
-
-1. Accepts public browser requests
-
-2. Verifies authentication
-
-3. Checks tunnel availability
-
-4. Sends request signal to local client
-
-5. Waits for data connection
-
-6. Bridges browser and local file server
-
+1. Parses HTTP Host Header for Subdomain
+2. Verifies Basic Authentication
+3. Checks Active Subdomain Socket in Memory Map
+4. Sends NEW_REQUEST Signal to Correct Local Client
+5. Bridges Browser and Local File Server
 =================================================
-
         ^                              |
-
-        | Control Channel              | Data Channel
-
-        | Port 9000                    | Port 9001
-
+        | Control Channel - Port 9000  | Data Channel - Port 9001
         |                              v
-
 =================================================
-
-[ Local Go Client ]
-
+[ Local Go Client - FolderExposer CLI ]
 -------------------------------------------------
-
-1. Maintains secure control connection
-
-2. Sends heartbeat signals
-
-3. Receives relay instructions
-
-4. Opens temporary data socket
-
-5. Connects to local file server
-
-6. Writes audit logs locally
-
+1. Requests Subdomain and Maintains Heartbeat
+2. Receives Relay Instructions
+3. Opens Temporary Data Socket
+4. Connects to Internal Local File Server
 =================================================
-
         |
-
         v
-
-[ Local File Server ]
-
-Port 8081
-
+[ Local File Server - Dynamic Port ]
 ```
 
+---
+
+## 🚀 Getting Started
+
+You can run FolderExposer in three ways:
+
+1. Run natively using Go.
+2. Deploy the relay server using Docker.
+3. Download a pre-built binary from GitHub Releases.
 
 ---
 
+## 🧑‍💻 Native Setup
 
-## 🔌 Port Usage
+### 1. Clone the Repository
 
-
-| Port | Component | Purpose |
-
-|---|---|---|
-
-| `8080` | Public Proxy Server | Public browser access point |
-
-| `9000` | Control Channel | Persistent client-server tunnel control |
-
-| `9001` | Data Channel | Temporary high-speed data transfer socket |
-
-| `8081` | Local File Server | Serves local folder privately |
-
+```bash
+git clone https://github.com/Arnab-Pachal1234/FolderExposer.git
+cd FolderExposer
+```
 
 ---
 
+### 2. Start the Relay Server
 
-## 📁 Suggested Project Structure
+Run the relay server on your public machine, VPS, or cloud server.
 
+```bash
+go run ./cmd/folder-exposer server
+```
+
+By default, the relay server uses:
+
+| Service | Default Port | Purpose |
+|---|---:|---|
+| Public HTTP Relay | `8080` | Public browser access |
+| Control Channel | `9000` | Persistent client control connection |
+| Data Channel | `9001` | Temporary high-speed data transfer |
+
+You can also customize the ports:
+
+```bash
+go run ./cmd/folder-exposer server --public-port 80 --control-port 7000
+```
+
+---
+
+### 3. Expose a Local Folder
+
+On the machine containing the files you want to share, run:
+
+```bash
+go run ./cmd/folder-exposer expose ./shared_folder --subdomain my-api --password "secure123"
+```
+
+Leave the subdomain blank to let the server generate a random public URL:
+
+```bash
+go run ./cmd/folder-exposer expose ./shared_folder --password "secure123"
+```
+
+---
+
+### ✅ Expected Output
 
 ```text
-
-localtunnel-go/
-
-│
-
-├── cmd/
-
-│   ├── server/
-
-│   │   └── main.go
-
-│   │
-
-│   └── client/
-
-│       └── main.go
-
-│
-
-├── internal/
-
-│   ├── auth/
-
-│   ├── tunnel/
-
-│   ├── proxy/
-
-│   ├── logger/
-
-│   └── health/
-
-│
-
-├── shared_folder/
-
-│   └── example files
-
-│
-
-├── security_report.json
-
-├── go.mod
-
-├── go.sum
-
-└── README.md
-
+=======================================================
+🚀 SUCCESS! YOUR FOLDER IS LIVE ON THE INTERNET
+=======================================================
+🌍 Public URL: http://my-api.localhost:8080
+🔒 Password:   secure123
+📡 Local Port: 8081
+=======================================================
+Listening for incoming connections. Press CTRL+C to stop.
 ```
-
-
----
-
-
-## ⚙️ Prerequisites
-
-
-Before running this project, make sure you have:
-
-
-- Go `1.20` or higher
-
-- A Linux VPS or local machine for testing
-
-- Basic knowledge of terminal commands
-
-- Required ports opened on the VPS firewall
-
-
----
-
 
 ---
 
 ## 🐳 Docker Deployment
 
-You can run the **FolderExposer Relay Server** instantly using the official Docker image published on Docker Hub.
+Docker is the recommended way to deploy the **FolderExposer Relay Server** on a VPS or cloud server.
 
-Docker image:
+### 1. Pull and Run the Docker Image
 
-```text
-arnabpachal/folder-exposer:latest
-```
-
-This is useful when you want to deploy the public Relay Server on a VPS/cloud server without manually building the Go server.
-
----
-
-### 1. Pull the Docker Image
-
-```bash
-docker pull arnabpachal/folder-exposer:latest
-```
-
----
-
-### 2. Run the Relay Server with Docker
-
-Run this command on your VPS or cloud server:
+Run this command on your cloud server:
 
 ```bash
 docker run -d \
@@ -344,542 +187,152 @@ docker run -d \
 
 ---
 
-### 3. Docker Port Mapping
+### 2. Docker Port Mapping
 
 | Host Port | Container Port | Purpose |
-|---|---|---|
+|---:|---:|---|
 | `80` | `8080` | Public browser access without typing a port |
-| `9000` | `9000` | Persistent Control Channel |
-| `9001` | `9001` | Ephemeral Data Channel for high-speed file/video transfer |
-
-> **Note:** Port `80` is mapped to container port `8080`, so users can access the public gateway using only the VPS IP address, for example `http://YOUR_VPS_PUBLIC_IP`.
+| `9000` | `9000` | Persistent control channel |
+| `9001` | `9001` | Ephemeral data channel for file transfers |
 
 ---
 
-### 4. Start the Local Client
-
-On the machine containing the folder you want to expose, download the latest client binary from the project **Releases** tab.
-
-You can also run the client directly using Go:
+### 3. Check Running Container
 
 ```bash
-go run ./cmd/client/main.go
+docker ps
 ```
 
-Expected output:
+You should see a running container named:
 
 ```text
-[Client] Preparing to expose folder: /myshared_folder
-[Client] Security Handshake Complete: Secure tunnel verified and open
+folder-exposer
 ```
 
 ---
 
-### 5. Access the Shared Folder
-
-Open any browser and visit:
-
-```text
-http://YOUR_VPS_PUBLIC_IP
-```
-
-You will be asked for authentication through the browser's native login prompt.
-
-Example credentials:
-
-```text
-Username: anything
-Password: secret_folder_123
-```
-
-After successful authentication, the Relay Server will securely forward the request to your local client through the tunnel.
-
----
-
-## 📦 Releases
-
-This project also provides release builds so users can download the latest binaries directly instead of building everything manually.
-
-Users can download the latest client/server binaries from the GitHub **Releases** tab and run the required executable for their operating system.
-
-Example usage after downloading the client binary:
+### 4. View Logs
 
 ```bash
-./folder-exposer-client
+docker logs -f folder-exposer
 ```
 
-Or, on Windows:
+---
 
-```powershell
-folder-exposer-client.exe
-```
-
-
-## 🚀 Getting Started
-
-
-### 1. Clone the Repository
-
+### 5. Stop the Relay Server
 
 ```bash
-
-git clone git@github.com:Arnab-Pachal1234/FolderExposer.git
-
-cd FolderExposer
-
+docker stop folder-exposer
 ```
-
 
 ---
 
-
-### 2. Start the Relay Server
-
-
-Run this command on the VPS or public machine:
-
+### 6. Remove the Container
 
 ```bash
-
-go run ./cmd/server/main.go
-
+docker rm folder-exposer
 ```
-
-
-Expected output:
-
-
-```text
-
-[Server] Secured Cloud Relay listening on port :9000
-
-[Server] Public Proxy listening on port :8080
-
-[Server] Data Channel listening on port :9001
-
-```
-
 
 ---
 
+## 📦 Releases & Binaries
 
-### 3. Start the Local Client
+FolderExposer uses **GoReleaser** and **GitHub Actions** to automatically compile ready-to-use executables.
 
+Instead of installing Go, users can download the latest `folder-exposer` binary for their operating system from the GitHub **Releases** page.
 
-Run this command on your local machine:
+### Example Usage with Downloaded Binary
 
+#### Linux / macOS
 
 ```bash
-
-go run ./cmd/client/main.go
-
+./folder-exposer expose ./my_folder --subdomain test --password "1234"
 ```
 
-
-Expected output:
-
-
-```text
-
-[Client] Preparing to expose folder: ./shared_folder
-
-[Client] Internal file server running on localhost:8081
-
-[Client] Security handshake completed successfully
-
-[Client] Secure tunnel is now active
-
-```
-
-
----
-
-
-### 4. Access the Shared Folder
-
-
-Open your browser and visit:
-
-
-```text
-
-http://localhost:8080
-
-```
-
-
-Or, if running on a VPS:
-
-
-```text
-
-http://YOUR_VPS_PUBLIC_IP:8080
-
-```
-
-
-You will be asked for authentication.
-
-
-Example credentials:
-
-
-```text
-
-Username: anything
-
-Password: secret_folder_123
-
-```
-
-
----
-
-
-## 🔐 Authentication Flow
-
-
-```text
-
-Browser Request
-
-      |
-
-      v
-
-HTTP Basic Auth Check
-
-      |
-
-      v
-
-Relay Server Validates Access
-
-      |
-
-      v
-
-Relay Signals Local Client
-
-      |
-
-      v
-
-Local Client Opens Data Tunnel
-
-      |
-
-      v
-
-File Transfer Starts
-
-```
-
-
-Only authenticated users are allowed to access the exposed folder.
-
-
----
-
-
-## 📊 Security Audit Logging
-
-
-Every successful authenticated request is logged and sent back to the local client.
-
-
-Example `security_report.json`:
-
-
-```json
-
-{"time":"14:32:05","ip":"192.168.1.45:54321","path":"/"}
-
-{"time":"14:45:12","ip":"10.0.0.9:65432","path":"/secret_video.mp4"}
-
-```
-
-
-This helps track:
-
-
-- Who accessed the tunnel
-
-- When they accessed it
-
-- Which file or path they requested
-
-
----
-
-
-## 🧠 Memory and Connection Management
-
-
-The project includes aggressive socket cleanup techniques to avoid memory leaks.
-
-
-### Implemented safety mechanisms:
-
-
-- EOF detection
-
-- Idle timeout cleanup
-
-- Broken socket detection
-
-- Bidirectional teardown
-
-- Dead connection removal
-
-- Automatic resource release
-
-
-When either side of the connection closes, the tunnel immediately tears down the paired socket.
-
-
----
-
-
-## 🧵 Concurrency Control
-
-
-To avoid unstable parallel transfers, the relay server uses a busy-lock mechanism.
-
-
-```text
-
-Request 1: Accepted
-
-Request 2: Dropped if tunnel is busy
-
-Request 3: Dropped if tunnel is busy
-
-```
-
-
-This is useful when transferring large files or streaming videos, where multiple background browser requests may otherwise interfere with the main transfer.
-
-
----
-
-
-## ❤️ Health Check System
-
-
-The client and server use heartbeat messages to verify tunnel health.
-
-
-Example:
-
-
-```text
-
-Client -> Server: PING
-
-Server -> Client: PONG
-
-```
-
-
-If the heartbeat fails, the server can detect that the local client is disconnected.
-
-
----
-
-
-## 🛠️ Debugging
-
-
-The system prints detailed logs for observing tunnel behavior.
-
-
-Example server logs:
-
-
-```text
-
-[DEBUG] Public browser connected
-
-[DEBUG] Authentication successful
-
-[DEBUG] Tunnel is available
-
-[DEBUG] Signal sent to local client
-
-[DEBUG] Data socket connected
-
-[DEBUG] Starting bidirectional stream
-
-[DEBUG] EOF detected, closing sockets
-
-```
-
-
-Example client logs:
-
-
-```text
-
-[Client] Received tunnel request
-
-[Client] Opening data channel
-
-[Client] Connected to local file server
-
-[Client] Streaming data
-
-[Client] Transfer completed
-
-```
-
-
----
-
-
-## 🧪 Testing Locally
-
-
-You can test the entire system on your own machine using multiple terminals.
-
-
-### Terminal 1: Start Server
-
+#### Windows
 
 ```bash
-
-go run ./cmd/server/main.go
-
+folder-exposer.exe expose ./my_folder --subdomain test --password "1234"
 ```
 
+---
 
-### Terminal 2: Start Client
+## 📁 Project Structure
 
-
-```bash
-
-go run ./cmd/client/main.go
-
+```text
+FolderExposer/
+│
+├── cmd/
+│   └── folder-exposer/
+│       ├── main.go      # Entry point
+│       ├── root.go      # Base CLI command
+│       ├── server.go    # Reverse proxy server logic
+│       └── expose.go    # Local client agent logic
+│
+├── pkg/
+│   └── tunnel/          # Shared network and message struct models
+│
+├── Dockerfile           # Multi-stage production Docker build
+├── .goreleaser.yaml     # CI/CD cross-compilation config
+└── go.mod               # Go module file
 ```
 
+---
 
-### Terminal 3: Access Public Proxy
+## 🔐 Security Notes
 
+FolderExposer is designed for **educational**, **experimental**, and **security architecture learning** purposes.
 
-```bash
+Before using it in a production environment with highly sensitive data, it is strongly recommended to implement:
 
-curl -u user:secret_folder_123 http://localhost:8080
+- TLS/HTTPS encryption.
+- Strong authentication tokens.
+- Rate limiting.
+- Request logging and monitoring.
+- Domain-level access controls.
+- Firewall rules for relay server ports.
 
-```
-
+> Public users should never directly access your local machine. FolderExposer follows a relay-based approach where every request is verified before socket bridging.
 
 ---
 
+## 🧪 Example Use Cases
 
-## 🧩 Technologies Used
-
-
-- Go
-
-- Raw TCP sockets
-
-- HTTP server
-
-- HTTP Basic Authentication
-
-- Goroutines
-
-- Mutex locking
-
-- Bidirectional `io.Copy`
-
-- JSON logging
-
-- Custom timeout connection wrappers
-
+- Share a local project demo with friends or testers.
+- Expose a folder from your laptop without uploading files to a cloud provider.
+- Test reverse tunneling and relay server architecture.
+- Learn raw TCP socket routing and HTTP hijacking in Go.
+- Build a lightweight alternative to local tunneling tools for learning purposes.
 
 ---
 
+## 🛠️ Tech Stack
 
-## 📌 Use Cases
-
-
-- Securely sharing local folders over the internet
-
-- Private file transfer without uploading to cloud storage
-
-- Temporary public access to local files
-
-- Secure remote file browsing
-
-- Learning reverse tunneling architecture
-
-- Understanding Go networking and socket management
-
+| Technology | Purpose |
+|---|---|
+| Go | Core application logic |
+| Cobra CLI | Unified command-line interface |
+| Raw TCP Sockets | Relay and data channel communication |
+| HTTP Host Routing | Subdomain-based multi-tenant routing |
+| Docker | Lightweight relay server deployment |
+| Alpine Linux | Minimal production image |
+| GoReleaser | Cross-platform release automation |
+| GitHub Actions | CI/CD pipeline |
 
 ---
-
-
-## ⚠️ Security Notes
-
-
-This project is designed for educational and experimental security architecture learning.
-
-
-For production usage, you should add:
-
-
-- HTTPS/TLS support
-
-- Strong token rotation
-
-- Rate limiting
-
-- IP allowlisting
-
-- Brute-force protection
-
-- Encrypted audit logs
-
-- More advanced session management
-
-
----
-
 
 ## 👨‍💻 Author
 
-
 **Arnab Pachal**
 
-
-Built as a deep-dive project into:
-
-
-- Low-level networking
-
-- Secure reverse tunneling
-
-- Zero-trust access design
-
-- Go concurrency
-
-- Socket lifecycle management
-
-- High-speed file transfer systems
-
+GitHub: [Arnab-Pachal1234](https://github.com/Arnab-Pachal1234)
 
 ---
 
+## ⭐ Support
 
+If you find this project useful, consider giving it a star on GitHub.
 
-## ⭐ Final Note
-
-
-Localtunnel-Go demonstrates how a secure reverse tunnel can expose local resources to the internet without moving the actual data to the cloud.
-
-
-The main goal of this project is to explore how secure tunneling, authentication, socket forwarding, telemetry logging, and memory-safe connection handling can work together in a real-world networking system.
-
-
-this was the prevous 
+```text
+Secure. Lightweight. Multi-Tenant. Zero-Trust.
+```
