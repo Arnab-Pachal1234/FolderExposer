@@ -8,7 +8,7 @@ WORKDIR /app
 
 # Copy the go.mod and go.sum files
 COPY go.mod ./
-# COPY go.sum ./  <-- Uncomment this if you have a go.sum file!
+COPY go.sum ./
 
 # Download all dependencies (like Cobra and AutoCert)
 RUN go mod download
@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o server-bin ./cmd/folde
 # ==========================================
 FROM alpine:latest
 
-# Install CA certificates for Let's Encrypt Auto-TLS
+# Install CA certificates for secure connections
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
@@ -36,6 +36,5 @@ COPY --from=builder /app/server-bin .
 # Expose standard HTTP/HTTPS and your custom tunnel ports
 EXPOSE 80 443 9000 9001
 
-# Start the binary, but DON'T run the server command yet. 
-# We will pass "server --domain XYZ" dynamically from the VPS!
-ENTRYPOINT ["./server-bin"]
+# THE FIX: Start the binary AND automatically trigger the server command!
+ENTRYPOINT ["./server-bin", "server"]

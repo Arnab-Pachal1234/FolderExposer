@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync" // <-- ADDED
 	"time"
 
 	"github.com/Arnab-Pachal1234/FolderExposer/pkg/tunnel"
@@ -15,10 +16,10 @@ import (
 )
 
 var (
-	// Removed the 'password' variable since we completely ripped it out of the architecture!
-	serverIP  string
-	subdomain string
-	localPort int
+	vpsIP      string
+	rootDomain string
+	subdomain  string
+	localPort  int
 )
 
 var exposeCmd = &cobra.Command{
@@ -35,10 +36,10 @@ var exposeCmd = &cobra.Command{
 		localAddr := fmt.Sprintf(":%d", localPort)
 		go startInternalFileServer(folderToExpose, localAddr)
 
-		controlAddr := fmt.Sprintf("%s:9000", serverIP)
+		controlAddr := fmt.Sprintf("%s:9000", vpsIP)
 		conn, err := net.Dial("tcp", controlAddr)
 		if err != nil {
-			fmt.Printf("Connection error to server %s: %v\n", controlAddr, err)
+			fmt.Printf("\n[FATAL] Connection error to VPS %s: %v\n", controlAddr, err)
 			return
 		}
 		defer conn.Close()
@@ -47,7 +48,6 @@ var exposeCmd = &cobra.Command{
 			Type:      "INIT",
 			Payload:   subdomain,
 			AuthToken: "dev_secure_99",
-			// Removed the password field here as well
 		}
 
 		if err := tunnel.WriteJSON(conn, initMsg); err != nil {
@@ -66,9 +66,7 @@ var exposeCmd = &cobra.Command{
 		}
 
 		finalSubdomain := resp.Payload
-
-		// REVERTED TO THE CLEAN CLOUDFLARE HTTPS URL (No Port 8080!)
-		publicURL := fmt.Sprintf("https://%s.%s", finalSubdomain, serverIP)
+		publicURL := fmt.Sprintf("https://%s.%s", finalSubdomain, rootDomain)
 
 		fmt.Println("\n=======================================================")
 		fmt.Println("🚀 SUCCESS! YOUR FOLDER IS LIVE ON THE INTERNET")
@@ -86,70 +84,54 @@ var exposeCmd = &cobra.Command{
 					break
 				}
 
-				if msg.Type == "PONG" {
-					// Heartbeat verified
-				} else if msg.Type == "AUDIT_LOG" {
-					f, err := os.OpenFile("security_report.json", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-					if err == nil {
-						f.WriteString(msg.Payload + "\n")
-						f.Close()
-					}
-				} else if msg.Type == "NEW_REQUEST" {
+				if msg.Type == "NEW_REQUEST" {
 					fmt.Println("\n[DEBUG-CLIENT] VPS requested data! Opening TLS encrypted tunnel bridge...")
 
-					dataAddr := fmt.Sprintf("%s:9001", serverIP)
+					dataAddr := fmt.Sprintf("%s:9001", vpsIP)
+					tlsConfig := &tls.Config{InsecureSkipVerify: true}
 
-					// --- YOUR SECURE TLS UPGRADE ---
-					tlsConfig := &tls.Config{
-						InsecureSkipVerify: true, // Standard for internal infrastructure tunnels
+					// Robust retry logic for the data channel
+					var vpsDataConn *tls.Conn
+					var err1 error
+					for i := 0; i < 3; i++ {
+						vpsDataConn, err1 = tls.Dial("tcp", dataAddr, tlsConfig)
+						if err1 == nil {
+							break
+						}
+						time.Sleep(500 * time.Millisecond)
 					}
-					vpsDataConn, err1 := tls.Dial("tcp", dataAddr, tlsConfig)
-					// -------------------------------
 
 					if err1 != nil {
-						fmt.Printf("[DEBUG-CLIENT] Error connecting securely to VPS %s: %v\n", dataAddr, err1)
+						fmt.Printf("[DEBUG-CLIENT] Error connecting securely: %v\n", err1)
+						continue
 					}
 
-					targetApp := fmt.Sprintf("localhost:%d", localPort)
-					localApp, err2 := net.Dial("tcp", targetApp)
+					localApp, err2 := net.Dial("tcp", fmt.Sprintf("localhost:%d", localPort))
 					if err2 != nil {
-						fmt.Printf("[DEBUG-CLIENT] Error connecting to Local File Server 8081: %v\n", err2)
+						vpsDataConn.Close()
+						continue
 					}
 
-					if vpsDataConn != nil && localApp != nil {
-						fmt.Println("[DEBUG-CLIENT] TLS Sockets established. Streaming encrypted data bidirectionally...")
+					fmt.Println("[DEBUG-CLIENT] TLS Sockets established. Streaming...")
 
-						go func() {
-							done := make(chan string, 2)
-
-							go func() {
-								io.Copy(vpsDataConn, localApp)
-								done <- "Local File Server finished."
-							}()
-							go func() {
-								io.Copy(localApp, vpsDataConn)
-								done <- "VPS closed the pipe."
-							}()
-
-							reason := <-done
-							fmt.Printf("[DEBUG-CLIENT] Bridge torn down. Reason: %s\n", reason)
-
-							vpsDataConn.Close()
-							localApp.Close()
-							close(done)
-							fmt.Println("[DEBUG-CLIENT] Local sockets cleanly released.")
-						}()
-					}
+					go func() {
+						var wg sync.WaitGroup
+						wg.Add(2)
+						go func() { defer wg.Done(); io.Copy(vpsDataConn, localApp) }()
+						go func() { defer wg.Done(); io.Copy(localApp, vpsDataConn) }()
+						wg.Wait()
+						vpsDataConn.Close()
+						localApp.Close()
+						fmt.Println("[DEBUG-CLIENT] Bridge torn down cleanly.")
+					}()
 				}
 			}
 		}()
 
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
-
 		for range ticker.C {
 			if err := tunnel.WriteJSON(conn, tunnel.Message{Type: "PING"}); err != nil {
-				fmt.Println("[Client] Broken tunnel pipe detected.")
 				break
 			}
 		}
@@ -158,19 +140,15 @@ var exposeCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
-
-	exposeCmd.Flags().StringVarP(&serverIP, "server", "s", "arnabpachal.site", "The IP address of your VPS relay")
-	exposeCmd.Flags().StringVarP(&subdomain, "subdomain", "d", "", "Requested subdomain (leave blank for random)")
-	exposeCmd.Flags().IntVarP(&localPort, "local-port", "l", 8081, "Local port for the internal file server")
+	exposeCmd.Flags().StringVarP(&vpsIP, "server", "s", "YOUR_VPS_IP_HERE", "The raw IP address of your VPS relay")
+	exposeCmd.Flags().StringVarP(&rootDomain, "domain", "r", "arnabpachal.site", "The root domain")
+	exposeCmd.Flags().StringVarP(&subdomain, "subdomain", "d", "", "Requested subdomain")
+	exposeCmd.Flags().IntVarP(&localPort, "local-port", "l", 8081, "Local port")
 }
 
 func startInternalFileServer(folderPath string, port string) {
 	absolutePath, _ := filepath.Abs(folderPath)
 	fs := http.FileServer(http.Dir(absolutePath))
 	http.Handle("/", fs)
-
-	fmt.Printf("[Client] Internal File Server running silently on localhost%s\n", port)
-	if err := http.ListenAndServe(port, nil); err != nil {
-		fmt.Printf("[Client] File server crashed: %v\n", err)
-	}
+	http.ListenAndServe(port, nil)
 }
