@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/Arnab-Pachal1234/FolderExposer/pkg/tunnel"
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 const SecureSystemToken = "dev_secure_99"
@@ -21,6 +24,7 @@ var (
 	publicPort  int
 	controlPort int
 	dataPort    int
+	rootDomain  string
 )
 
 type IdleTimeoutConn struct {
@@ -82,6 +86,7 @@ func init() {
 	serverCmd.Flags().IntVarP(&publicPort, "public-port", "p", 8080, "Port for public web traffic")
 	serverCmd.Flags().IntVarP(&controlPort, "control-port", "c", 9000, "Port for the local client heartbeat")
 	serverCmd.Flags().IntVarP(&dataPort, "data-port", "d", 9001, "Port for the ephemeral data sockets")
+	serverCmd.Flags().StringVar(&rootDomain, "domain", "", "Your base domain for Auto-TLS (e.g., arnabpachal.site)")
 }
 
 func (s *RelayServer) handleClient(conn net.Conn) {
@@ -258,7 +263,40 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		}()
 	})
 
-	http.ListenAndServe(publicPort, nil)
+	if rootDomain != "" {
+		fmt.Printf("[Server] Enterprise TLS Enabled for domain: %s\n", rootDomain)
+
+		certManager := &autocert.Manager{
+			Prompt: autocert.AcceptTOS,
+			Cache:  autocert.DirCache("certs"), // Saves certificates to disk so it doesn't request them every reboot
+			HostPolicy: func(ctx context.Context, host string) error {
+				// Allow the root domain OR any subdomain (e.g. *.arnabpachal.site)
+				if host == rootDomain || strings.HasSuffix(host, "."+rootDomain) {
+					return nil
+				}
+				return fmt.Errorf("acme/autocert: host not allowed: %s", host)
+			},
+		}
+
+		server := &http.Server{
+			Addr: ":443", // HTTPS standard port
+			TLSConfig: &tls.Config{
+				GetCertificate: certManager.GetCertificate,
+			},
+		}
+
+		// Spin up Port 80 just to automatically redirect HTTP to HTTPS
+		go http.ListenAndServe(":80", certManager.HTTPHandler(nil))
+
+		fmt.Println("[Server] HTTPS Gateway listening on Port 443...")
+		if err := server.ListenAndServeTLS("", ""); err != nil {
+			fmt.Printf("TLS Server crashed: %v\n", err)
+		}
+	} else {
+		// Fallback to standard HTTP if no domain is provided
+		fmt.Printf("[Server] Warning: No domain provided. Running in unencrypted HTTP mode on %s...\n", publicPort)
+		http.ListenAndServe(publicPort, nil)
+	}
 }
 
 func generateRandomSubdomain() string {
