@@ -65,14 +65,10 @@ var exposeCmd = &cobra.Command{
 			return
 		}
 
-		finalSubdomain := resp.Payload
-
-		publicURL := fmt.Sprintf("http://%s.%s:8080", finalSubdomain, serverIP)
-
 		fmt.Println("\n=======================================================")
 		fmt.Println("🚀 SUCCESS! YOUR FOLDER IS LIVE ON THE INTERNET")
 		fmt.Println("=======================================================")
-		fmt.Printf("🌍 Public URL: %s\n", publicURL)
+		fmt.Printf("🌍 Public URL: https://%s.%s\n", subdomain, serverIP)
 		fmt.Println("=======================================================")
 		fmt.Println("Listening for incoming connections. Press CTRL+C to stop.")
 
