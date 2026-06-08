@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -42,11 +43,9 @@ func (i *IdleTimeoutConn) Write(b []byte) (int, error) {
 	return i.Conn.Write(b)
 }
 
+// STRIPPED DOWN: No more passwords, no more locks!
 type ActiveTunnel struct {
 	ControlConn net.Conn
-	Password    string
-	IsBusy      bool
-	mu          sync.Mutex
 }
 
 type RelayServer struct {
@@ -67,7 +66,7 @@ var serverCmd = &cobra.Command{
 			return
 		}
 		defer listener.Close()
-		fmt.Printf("[Server] Secured Cloud Relay listening on port %s...\n", controlAddr)
+		fmt.Printf("[Server] High-Speed Cloud Relay listening on port %s...\n", controlAddr)
 
 		go server.startSecureGateway(fmt.Sprintf(":%d", publicPort), fmt.Sprintf(":%d", dataPort))
 
@@ -97,51 +96,40 @@ func (s *RelayServer) handleClient(conn net.Conn) {
 	}
 
 	if initialMessage.AuthToken != SecureSystemToken {
-		fmt.Printf("[Server] Security Alert: Unauthorized access attempt using token: %s\n", initialMessage.AuthToken)
-		tunnel.WriteJSON(conn, tunnel.Message{Type: "AUTH_FAILURE", Payload: "Invalid Auth Token Provided"})
 		conn.Close()
 		return
 	}
 
 	requestedSubdomain := initialMessage.Payload
-	folderPassword := initialMessage.Password
 
 	s.mu.Lock()
-
-	// ALGORITHM 1: Auto-Generate if the user left it blank
 	if requestedSubdomain == "" {
 		requestedSubdomain = generateRandomSubdomain()
 	}
 
-	// ALGORITHM 2: Collision Detection
 	if _, exists := s.tunnels[requestedSubdomain]; exists {
 		s.mu.Unlock()
-		fmt.Printf("[Server] Rejected: Subdomain '%s' is already in use by another user.\n", requestedSubdomain)
-		tunnel.WriteJSON(conn, tunnel.Message{Type: "AUTH_FAILURE", Payload: "Subdomain already in use. Please try another."})
+		tunnel.WriteJSON(conn, tunnel.Message{Type: "AUTH_FAILURE", Payload: "Subdomain already in use."})
 		conn.Close()
 		return
 	}
 
-	// Register the tunnel
 	s.tunnels[requestedSubdomain] = &ActiveTunnel{
 		ControlConn: conn,
-		Password:    folderPassword,
-		IsBusy:      false,
 	}
 	s.mu.Unlock()
 
-	fmt.Printf("[Server] Authentication Successful. Tunnel '%s' is now online.\n", requestedSubdomain)
+	fmt.Printf("[Server] Tunnel '%s' is now online and open to the public.\n", requestedSubdomain)
 
-	// FIX: Send the FINAL confirmed subdomain back to the laptop
 	tunnel.WriteJSON(conn, tunnel.Message{Type: "INIT_ACK", Payload: requestedSubdomain})
 
-	// defer func() {
-	// 	s.mu.Lock()
-	// 	delete(s.tunnels, tunnelID)
-	// 	s.mu.Unlock()
-	// 	conn.Close()
-	// 	fmt.Printf("[Server] Client '%s' disconnected. Routing path removed immediately.\n", tunnelID)
-	// }()
+	defer func() {
+		s.mu.Lock()
+		delete(s.tunnels, requestedSubdomain)
+		s.mu.Unlock()
+		conn.Close()
+		fmt.Printf("[Server] Client '%s' disconnected. Path removed.\n", requestedSubdomain)
+	}()
 
 	for {
 		var msg tunnel.Message
@@ -155,78 +143,71 @@ func (s *RelayServer) handleClient(conn net.Conn) {
 }
 
 func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
-	dataListener, _ := net.Listen("tcp", dataPort)
+	cert, err := tls.LoadX509KeyPair("/root/certs/tunnel.crt", "/root/certs/tunnel.key")
+	if err != nil {
+		fmt.Printf("[FATAL] Could not load internal tunnel keys: %v\n", err)
+		return
+	}
+
+	// 2. Configure the server to require TLS
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+
+	// 3. UPGRADE: Listen using TLS instead of raw TCP
+	dataListener, err := tls.Listen("tcp", dataPort, tlsConfig)
+	if err != nil {
+		fmt.Printf("[FATAL] Failed to start encrypted data channel: %v\n", err)
+		return
+	}
+
 	dataConns := make(chan net.Conn)
 
 	go func() {
 		for {
-			conn, _ := dataListener.Accept()
+			conn, err := dataListener.Accept()
+			if err != nil {
+				fmt.Printf("[Server] Rejected unencrypted data connection attempt.\n")
+				continue
+			}
 			dataConns <- conn
 		}
 	}()
 
-	fmt.Printf("[Server] Public Proxy listening on %s. Data Channel on %s...\n", publicPort, dataPort)
-
 	http.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-		fmt.Printf("\n[DEBUG-SERVER] New public request from browser for path: %s\n", req.URL.Path)
+		if req.URL.Path == "/favicon.ico" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 
 		host := req.Host
 		requestedSubdomain := strings.Split(host, ".")[0]
-
-		fmt.Printf("\n[DEBUG-SERVER] Routing Request: Traffic arriving for subdomain -> [%s]\n", requestedSubdomain)
 
 		s.mu.Lock()
 		tunnelInfo, exists := s.tunnels[requestedSubdomain]
 		s.mu.Unlock()
 
 		if !exists {
-			fmt.Printf("[DEBUG-SERVER] Rejecting: No active client connected to '%s'.\n", requestedSubdomain)
-			http.Error(w, fmt.Sprintf("Tunnel '%s' is currently offline or does not exist.", requestedSubdomain), http.StatusNotFound)
+			http.Error(w, "Tunnel is offline", http.StatusNotFound)
 			return
 		}
 
-		_, pass, ok := req.BasicAuth()
-		if !ok || pass != tunnelInfo.Password {
-			fmt.Println("[DEBUG-SERVER] Rejecting: Incorrect or missing password.")
-			w.Header().Set("WWW-Authenticate", `Basic realm="Restricted Area"`)
-			http.Error(w, "Unauthorized Access", http.StatusUnauthorized)
-			return
-		}
-
-		tunnelInfo.mu.Lock()
-		if tunnelInfo.IsBusy {
-			tunnelInfo.mu.Unlock()
-			fmt.Printf("[DEBUG-SERVER] Rejecting %s: Tunnel is currently busy!\n", req.URL.Path)
-			http.Error(w, "Resource currently in use by another user.", http.StatusServiceUnavailable)
-			return
-		}
-		tunnelInfo.IsBusy = true
-		tunnelInfo.mu.Unlock()
-		fmt.Println("[DEBUG-SERVER] Door Locked. Securing connection for data transfer.")
-
-		auditMsg := fmt.Sprintf(`{"time": "%s", "ip": "%s", "path": "%s"}`, time.Now().Format("15:04:05"), req.RemoteAddr, req.URL.Path)
-		tunnel.WriteJSON(tunnelInfo.ControlConn, tunnel.Message{Type: "AUDIT_LOG", Payload: auditMsg})
+		// NO MORE BASIC AUTH OR BUSY LOCKS!
+		// Traffic flows freely and concurrently.
 
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
+			// This will never trigger again because we disabled HTTP/2 below!
 			http.Error(w, "Server error", http.StatusInternalServerError)
 			return
 		}
 		publicConn, _, _ := hijacker.Hijack()
 
-		fmt.Println("[DEBUG-SERVER] Sending NEW_REQUEST signal to laptop...")
 		tunnel.WriteJSON(tunnelInfo.ControlConn, tunnel.Message{Type: "NEW_REQUEST"})
 
 		var laptopDataConn net.Conn
 		select {
 		case laptopDataConn = <-dataConns:
-			fmt.Println("[DEBUG-SERVER] Laptop successfully connected to Data Port!")
 		case <-time.After(5 * time.Second):
-			fmt.Println("[DEBUG-SERVER] TIMEOUT ERROR: Laptop failed to connect in time. Unlocking door.")
 			publicConn.Close()
-			tunnelInfo.mu.Lock()
-			tunnelInfo.IsBusy = false
-			tunnelInfo.mu.Unlock()
 			return
 		}
 
@@ -239,27 +220,10 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		safeLaptopConn := &IdleTimeoutConn{Conn: laptopDataConn, Timeout: idleDuration}
 
 		go func() {
-			done := make(chan string, 2)
-
-			go func() {
-				io.Copy(safePublicConn, safeLaptopConn)
-				done <- "Laptop File Server finished sending data."
-			}()
-			go func() {
-				io.Copy(safeLaptopConn, safePublicConn)
-				done <- "Public Browser closed the tab/connection."
-			}()
-
-			reason := <-done
-			fmt.Printf("[DEBUG-SERVER] Transfer stopped! Reason: %s\n", reason)
-
+			go io.Copy(safePublicConn, safeLaptopConn)
+			io.Copy(safeLaptopConn, safePublicConn)
 			publicConn.Close()
 			laptopDataConn.Close()
-
-			tunnelInfo.mu.Lock()
-			tunnelInfo.IsBusy = false
-			tunnelInfo.mu.Unlock()
-			fmt.Println("[DEBUG-SERVER] Sockets wiped. Door is UNLOCKED for the next request.")
 		}()
 	})
 
@@ -268,9 +232,8 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 
 		certManager := &autocert.Manager{
 			Prompt: autocert.AcceptTOS,
-			Cache:  autocert.DirCache("certs"), // Saves certificates to disk so it doesn't request them every reboot
+			Cache:  autocert.DirCache("certs"),
 			HostPolicy: func(ctx context.Context, host string) error {
-				// Allow the root domain OR any subdomain (e.g. *.arnabpachal.site)
 				if host == rootDomain || strings.HasSuffix(host, "."+rootDomain) {
 					return nil
 				}
@@ -279,22 +242,22 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		}
 
 		server := &http.Server{
-			Addr: ":443", // HTTPS standard port
+			Addr: ":443",
 			TLSConfig: &tls.Config{
 				GetCertificate: certManager.GetCertificate,
 			},
+			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
+
+			// ADD THIS LINE: Discard background TLS handshake noise
+			ErrorLog: log.New(io.Discard, "", 0),
 		}
 
-		// Spin up Port 80 just to automatically redirect HTTP to HTTPS
 		go http.ListenAndServe(":80", certManager.HTTPHandler(nil))
 
-		fmt.Println("[Server] HTTPS Gateway listening on Port 443...")
 		if err := server.ListenAndServeTLS("", ""); err != nil {
 			fmt.Printf("TLS Server crashed: %v\n", err)
 		}
 	} else {
-		// Fallback to standard HTTP if no domain is provided
-		fmt.Printf("[Server] Warning: No domain provided. Running in unencrypted HTTP mode on %s...\n", publicPort)
 		http.ListenAndServe(publicPort, nil)
 	}
 }

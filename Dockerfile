@@ -1,39 +1,41 @@
 # ==========================================
 # STAGE 1: The Builder
 # ==========================================
-FROM golang:1.20-alpine AS builder
+FROM golang:alpine AS builder
 
 # Set the working directory inside the container
 WORKDIR /app
 
-# Copy the go.mod file
+# Copy the go.mod and go.sum files
 COPY go.mod ./
+# COPY go.sum ./  <-- Uncomment this if you have a go.sum file!
+
+# Download all dependencies (like Cobra and AutoCert)
+RUN go mod download
 
 # Copy the rest of your source code
 COPY . .
 
-# Compile the server binary statically
-# CGO_ENABLED=0 ensures the binary doesn't rely on external C libraries
-# -ldflags="-w -s" strips debugging data to make the file size extremely small
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o server-bin ./cmd/server/main.go
+# Compile the unified Cobra CLI binary statically
+# Pointing to the new folder-exposer directory!
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o server-bin ./cmd/folder-exposer/
 
 # ==========================================
 # STAGE 2: The Production Image
 # ==========================================
-# Alpine is a highly secure, ultra-lightweight Linux distribution (~5MB)
 FROM alpine:latest
 
-# Install CA certificates just in case you add HTTPS/SSL later
+# Install CA certificates for Let's Encrypt Auto-TLS
 RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
 
-# Copy ONLY the compiled binary from the builder stage above
+# Copy ONLY the compiled binary from the builder stage
 COPY --from=builder /app/server-bin .
 
-# Expose the specific ports your server needs to operate
-# 8080: Public Proxy | 9000: Control Channel | 9001: Data Channel
-EXPOSE 8080 9000 9001
+# Expose standard HTTP/HTTPS and your custom tunnel ports
+EXPOSE 80 443 9000 9001
 
-# Command to run when the container starts
-CMD ["./server-bin"]
+# Start the binary, but DON'T run the server command yet. 
+# We will pass "server --domain XYZ" dynamically from the VPS!
+ENTRYPOINT ["./server-bin"]

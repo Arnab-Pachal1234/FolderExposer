@@ -1,33 +1,34 @@
-version: 1
-project_name: FolderExposer
+version: 2
+project_name: folder-exposer
 
 builds:
-  - id: server
-    main: ./cmd/server/main.go
-    binary: server
+  - env:
+      - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
+      - darwin
     goarch:
       - amd64
       - arm64
-
-  - id: client
-    main: ./cmd/client/main.go
-    binary: client
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
+    main: ./cmd/folder-exposer/ # Points to your unified Cobra CLI
+    binary: folder-exposer      # Creates one single executable
+    ldflags:
+      - -s -w
 
 archives:
   - format: tar.gz
     name_template: >-
-      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        format: zip # Automatically gives Windows users a .zip file
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc

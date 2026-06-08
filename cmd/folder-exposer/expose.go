@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls" // <-- ADDED
 	"fmt"
 	"io"
 	"net"
@@ -17,7 +18,7 @@ var (
 	password  string
 	serverIP  string
 	subdomain string
-	localPort int // <-- ADD THIS
+	localPort int
 )
 
 var exposeCmd = &cobra.Command{
@@ -66,15 +67,12 @@ var exposeCmd = &cobra.Command{
 
 		finalSubdomain := resp.Payload
 
-		// Build the public URL (Note: You can change this to your real VPS domain later)
 		publicURL := fmt.Sprintf("http://%s.%s:8080", finalSubdomain, serverIP)
 
 		fmt.Println("\n=======================================================")
 		fmt.Println("🚀 SUCCESS! YOUR FOLDER IS LIVE ON THE INTERNET")
 		fmt.Println("=======================================================")
 		fmt.Printf("🌍 Public URL: %s\n", publicURL)
-		fmt.Printf("🔒 Password:   %s\n", password)
-		fmt.Printf("📡 Local Port: %d\n", localPort)
 		fmt.Println("=======================================================")
 		fmt.Println("Listening for incoming connections. Press CTRL+C to stop.")
 
@@ -96,12 +94,19 @@ var exposeCmd = &cobra.Command{
 						f.Close()
 					}
 				} else if msg.Type == "NEW_REQUEST" {
-					fmt.Println("\n[DEBUG-CLIENT] VPS requested data! Opening tunnel bridge...")
+					fmt.Println("\n[DEBUG-CLIENT] VPS requested data! Opening encrypted tunnel bridge...")
 
 					dataAddr := fmt.Sprintf("%s:9001", serverIP)
-					vpsDataConn, err1 := net.Dial("tcp", dataAddr)
+
+					// --- UPGRADED TO TLS ---
+					tlsConfig := &tls.Config{
+						InsecureSkipVerify: true,
+					}
+					vpsDataConn, err1 := tls.Dial("tcp", dataAddr, tlsConfig)
+					// -----------------------
+
 					if err1 != nil {
-						fmt.Printf("[DEBUG-CLIENT] Error connecting to VPS %s: %v\n", dataAddr, err1)
+						fmt.Printf("[DEBUG-CLIENT] Error connecting securely to VPS %s: %v\n", dataAddr, err1)
 					}
 
 					targetApp := fmt.Sprintf("localhost:%d", localPort)
@@ -111,7 +116,7 @@ var exposeCmd = &cobra.Command{
 					}
 
 					if vpsDataConn != nil && localApp != nil {
-						fmt.Println("[DEBUG-CLIENT] Sockets established. Streaming data bidirectionally...")
+						fmt.Println("[DEBUG-CLIENT] Sockets established. Streaming encrypted data bidirectionally...")
 
 						go func() {
 							done := make(chan string, 2)
@@ -152,8 +157,8 @@ var exposeCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
-	exposeCmd.Flags().StringVarP(&password, "password", "p", "secret_folder_123", "Basic Auth password for the web gate")
-	exposeCmd.Flags().StringVarP(&serverIP, "server", "s", "localhost", "The IP address of your VPS relay")
+
+	exposeCmd.Flags().StringVarP(&serverIP, "server", "s", "arnabpachal.site", "The IP address of your VPS relay")
 	exposeCmd.Flags().StringVarP(&subdomain, "subdomain", "d", "", "Requested subdomain (leave blank for random)")
 	exposeCmd.Flags().IntVarP(&localPort, "local-port", "l", 8081, "Local port for the internal file server")
 }
