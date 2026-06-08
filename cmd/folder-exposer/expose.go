@@ -140,7 +140,7 @@ var exposeCmd = &cobra.Command{
 
 func init() {
 	rootCmd.AddCommand(exposeCmd)
-	exposeCmd.Flags().StringVarP(&vpsIP, "server", "s", "YOUR_VPS_IP_HERE", "The raw IP address of your VPS relay")
+	exposeCmd.Flags().StringVarP(&vpsIP, "server", "s", "187.127.142.6", "The raw IP address of your VPS relay")
 	exposeCmd.Flags().StringVarP(&rootDomain, "domain", "r", "arnabpachal.site", "The root domain")
 	exposeCmd.Flags().StringVarP(&subdomain, "subdomain", "d", "", "Requested subdomain")
 	exposeCmd.Flags().IntVarP(&localPort, "local-port", "l", 8081, "Local port")
