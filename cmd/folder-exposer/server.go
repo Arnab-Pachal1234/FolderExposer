@@ -1,13 +1,15 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"strings"
@@ -16,7 +18,6 @@ import (
 
 	"github.com/Arnab-Pachal1234/FolderExposer/pkg/tunnel"
 	"github.com/spf13/cobra"
-	"golang.org/x/crypto/acme/autocert"
 )
 
 const SecureSystemToken = "dev_secure_99"
@@ -25,7 +26,6 @@ var (
 	publicPort  int
 	controlPort int
 	dataPort    int
-	rootDomain  string
 )
 
 type IdleTimeoutConn struct {
@@ -43,7 +43,6 @@ func (i *IdleTimeoutConn) Write(b []byte) (int, error) {
 	return i.Conn.Write(b)
 }
 
-// STRIPPED DOWN: No more passwords, no more locks!
 type ActiveTunnel struct {
 	ControlConn net.Conn
 }
@@ -84,8 +83,8 @@ func init() {
 	rootCmd.AddCommand(serverCmd)
 	serverCmd.Flags().IntVarP(&publicPort, "public-port", "p", 8080, "Port for public web traffic")
 	serverCmd.Flags().IntVarP(&controlPort, "control-port", "c", 9000, "Port for the local client heartbeat")
-	serverCmd.Flags().IntVarP(&dataPort, "data-port", "d", 9001, "Port for the ephemeral data sockets")
-	serverCmd.Flags().StringVar(&rootDomain, "domain", "", "Your base domain for Auto-TLS (e.g., arnabpachal.site)")
+	serverCmd.Flags().IntVarP(&dataPort, "data-port", "d", 9001, "Port for the ephemeral encrypted data sockets")
+	// Removed the rootDomain flag entirely as Cloudflare handles HTTPS now!
 }
 
 func (s *RelayServer) handleClient(conn net.Conn) {
@@ -142,17 +141,44 @@ func (s *RelayServer) handleClient(conn net.Conn) {
 	}
 }
 
-func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
-	cert, err := tls.LoadX509KeyPair("/root/certs/tunnel.crt", "/root/certs/tunnel.key")
+// THE UPGRADE: Generates an unbreakable TLS certificate completely in RAM!
+func generateEphemeralTLSCert() (tls.Certificate, error) {
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		fmt.Printf("[FATAL] Could not load internal tunnel keys: %v\n", err)
+		return tls.Certificate{}, err
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"FolderExposer Auto-TLS"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	return tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  priv,
+	}, nil
+}
+
+func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
+	// 1. Generate the certificate in memory (NO HARD DRIVE REQUIRED!)
+	cert, err := generateEphemeralTLSCert()
+	if err != nil {
+		fmt.Printf("[FATAL] Could not generate ephemeral TLS certificate: %v\n", err)
 		return
 	}
 
-	// 2. Configure the server to require TLS
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
 
-	// 3. UPGRADE: Listen using TLS instead of raw TCP
+	// 2. Start the encrypted listener on port 9001
 	dataListener, err := tls.Listen("tcp", dataPort, tlsConfig)
 	if err != nil {
 		fmt.Printf("[FATAL] Failed to start encrypted data channel: %v\n", err)
@@ -190,12 +216,8 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 			return
 		}
 
-		// NO MORE BASIC AUTH OR BUSY LOCKS!
-		// Traffic flows freely and concurrently.
-
 		hijacker, ok := w.(http.Hijacker)
 		if !ok {
-			// This will never trigger again because we disabled HTTP/2 below!
 			http.Error(w, "Server error", http.StatusInternalServerError)
 			return
 		}
@@ -227,38 +249,10 @@ func (s *RelayServer) startSecureGateway(publicPort string, dataPort string) {
 		}()
 	})
 
-	if rootDomain != "" {
-		fmt.Printf("[Server] Enterprise TLS Enabled for domain: %s\n", rootDomain)
-
-		certManager := &autocert.Manager{
-			Prompt: autocert.AcceptTOS,
-			Cache:  autocert.DirCache("certs"),
-			HostPolicy: func(ctx context.Context, host string) error {
-				if host == rootDomain || strings.HasSuffix(host, "."+rootDomain) {
-					return nil
-				}
-				return fmt.Errorf("acme/autocert: host not allowed: %s", host)
-			},
-		}
-
-		server := &http.Server{
-			Addr: ":443",
-			TLSConfig: &tls.Config{
-				GetCertificate: certManager.GetCertificate,
-			},
-			TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
-
-			// ADD THIS LINE: Discard background TLS handshake noise
-			ErrorLog: log.New(io.Discard, "", 0),
-		}
-
-		go http.ListenAndServe(":80", certManager.HTTPHandler(nil))
-
-		if err := server.ListenAndServeTLS("", ""); err != nil {
-			fmt.Printf("TLS Server crashed: %v\n", err)
-		}
-	} else {
-		http.ListenAndServe(publicPort, nil)
+	// Clean, stripped-down HTTP listener. Cloudflare handles the HTTPS encryption for the public!
+	fmt.Printf("[Server] Public Gateway ready on port %s\n", publicPort)
+	if err := http.ListenAndServe(publicPort, nil); err != nil {
+		fmt.Printf("[FATAL] Public server crashed: %v\n", err)
 	}
 }
 

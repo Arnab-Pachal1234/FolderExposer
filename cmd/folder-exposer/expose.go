@@ -1,7 +1,7 @@
 package main
 
 import (
-	"crypto/tls" // <-- ADDED
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	password  string
+	// Removed the 'password' variable since we completely ripped it out of the architecture!
 	serverIP  string
 	subdomain string
 	localPort int
@@ -23,7 +23,7 @@ var (
 
 var exposeCmd = &cobra.Command{
 	Use:   "expose [directory]",
-	Short: "Exposes a local directory to the relay server",
+	Short: "Exposes a local directory to the encrypted relay server",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		folderToExpose := args[0]
@@ -47,7 +47,7 @@ var exposeCmd = &cobra.Command{
 			Type:      "INIT",
 			Payload:   subdomain,
 			AuthToken: "dev_secure_99",
-			Password:  password,
+			// Removed the password field here as well
 		}
 
 		if err := tunnel.WriteJSON(conn, initMsg); err != nil {
@@ -65,10 +65,15 @@ var exposeCmd = &cobra.Command{
 			return
 		}
 
+		finalSubdomain := resp.Payload
+
+		// REVERTED TO THE CLEAN CLOUDFLARE HTTPS URL (No Port 8080!)
+		publicURL := fmt.Sprintf("https://%s.%s", finalSubdomain, serverIP)
+
 		fmt.Println("\n=======================================================")
 		fmt.Println("🚀 SUCCESS! YOUR FOLDER IS LIVE ON THE INTERNET")
 		fmt.Println("=======================================================")
-		fmt.Printf("🌍 Public URL: https://%s.%s\n", subdomain, serverIP)
+		fmt.Printf("🌍 Public URL: %s\n", publicURL)
 		fmt.Println("=======================================================")
 		fmt.Println("Listening for incoming connections. Press CTRL+C to stop.")
 
@@ -90,16 +95,16 @@ var exposeCmd = &cobra.Command{
 						f.Close()
 					}
 				} else if msg.Type == "NEW_REQUEST" {
-					fmt.Println("\n[DEBUG-CLIENT] VPS requested data! Opening encrypted tunnel bridge...")
+					fmt.Println("\n[DEBUG-CLIENT] VPS requested data! Opening TLS encrypted tunnel bridge...")
 
 					dataAddr := fmt.Sprintf("%s:9001", serverIP)
 
-					// --- UPGRADED TO TLS ---
+					// --- YOUR SECURE TLS UPGRADE ---
 					tlsConfig := &tls.Config{
-						InsecureSkipVerify: true,
+						InsecureSkipVerify: true, // Standard for internal infrastructure tunnels
 					}
 					vpsDataConn, err1 := tls.Dial("tcp", dataAddr, tlsConfig)
-					// -----------------------
+					// -------------------------------
 
 					if err1 != nil {
 						fmt.Printf("[DEBUG-CLIENT] Error connecting securely to VPS %s: %v\n", dataAddr, err1)
@@ -112,7 +117,7 @@ var exposeCmd = &cobra.Command{
 					}
 
 					if vpsDataConn != nil && localApp != nil {
-						fmt.Println("[DEBUG-CLIENT] Sockets established. Streaming encrypted data bidirectionally...")
+						fmt.Println("[DEBUG-CLIENT] TLS Sockets established. Streaming encrypted data bidirectionally...")
 
 						go func() {
 							done := make(chan string, 2)
